@@ -1,2 +1,2 @@
 # uqccc
-simulations for uqcc
+uqcc simulations
