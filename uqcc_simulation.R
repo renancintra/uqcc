@@ -1,14 +1,10 @@
+library('uclust')
+library("future")
 
-ma <- function(arr, n=10){
-  res = arr
-  
-  for(i in (floor(n/2)+1):(length(arr)-floor(n/2))){
-    
-    res[i] = mean(arr[(i-floor(n/2)):(i+floor(n/2))])
-    
-  }
-  res
-}
+source("utils.R")
+source("mpca_arma_fun.R")
+
+future::plan(multisession)
 
 # numero de instantes
 n_col <-1000 # t = 20 e 2000
@@ -48,67 +44,35 @@ for( n_ite_norig in 1:length(n_orig)){
     arl_Q<-c()
     arl_T2<-c()
     inicio<-Sys.time()
+    #for(repl in 1:100){
     for(repl in 1:100){
       inicio_rep <- Sys.time()
       # base crua
       # fase 1
       
-      mdserh0<-matrix(rep(NA), 
-                      nrow = n_orig[n_ite_norig],
-                      ncol = n_col)
-      
-      for(i in 1:n_orig[n_ite_norig] ){
-        
-        mdserh0[i,] <- arima.sim(n=n_col, model = list(ar= 0.5))
-        
-      }
-      
-      
-      mdserh1<-matrix(rep(NA), 
-                      nrow = n_fase2,
-                      ncol = n_col)
-      
-      for(i in 1:n_fase2){
-        
-        mdserh1[i,] <- arima.sim(n=n_col,
-        #                         model = list(ar = 0.5))
-                                         list(ar= alfa_h1[alfas_utili]))
-        
-        
-      }
+      mdserh0 <-
+        compute_mdser(nrows=n_orig[n_ite_norig],
+                      ncols=n_col,
+                      ar_param_list=list(ar = 0.5))
+
+      mdserh1 <-
+        compute_mdser(nrows=n_fase2,
+                      ncols=n_col,
+                      ar_param_list = list(ma = alfa_h1[alfas_utili]))
       
       #------------------
       # ACF -------------
       #------------------
       
-      
-      mdh0_acf <- matrix(rep(NA), 
-                         nrow = n_orig[n_ite_norig],
-                         ncol = lag_max_acf+1)
-      
-      for(i in 1:n_orig[n_ite_norig]){
-        
-        serie<-mdserh0[i,]
-        serie_ma<-serie-ma(serie)
-        aux<-NULL
-        aux<-acf(serie_ma, plot = FALSE, lag.max =lag_max_acf)$acf
-        
-        mdh0_acf[i,]<-aux 
-        
-      }
-      
-      mdh1_acf <- matrix(rep(NA), 
-                         nrow = n_fase2,
-                         ncol = lag_max_acf+1)
-      
-      for(i in 1:n_fase2){
-        
-        serie<-mdserh1[i,]
-        serie_ma<-serie-ma(serie)
-        aux<-NULL
-        aux<-acf(serie_ma, plot = FALSE, lag.max =lag_max_acf)$acf
-        mdh1_acf[i,]<-aux
-      }
+      mdh0_acf <-
+        compute_acf(nrows=n_orig[n_ite_norig],
+                    lag_max_acf = lag_max_acf,
+                    mdser = mdserh0)
+
+      mdh1_acf <-
+        compute_acf(nrows=n_fase2,
+                    lag_max_acf = lag_max_acf,
+                    mdser = mdserh1)
       
       #------------------
       # Drift------------
@@ -122,25 +86,14 @@ for( n_ite_norig in 1:length(n_orig)){
       
       # calculos bn --------------------
       
-      bn_new_pad_acf<-c()
-      bn_new_pad_drift<-c()
-      library('uclust')
-      source("v_bn.R")
-      
-      v_bn_calc_acf<-v_bn(mdh0_acf)
-      
-      v_bn_calc_drift<-v_bn(mdserh0_drift)
-      
       inicio_acf<-Sys.time()
-      for(i in 1:nrow(mdh1_acf)){
-        # bn padronizado
-        bn_new_pad_acf[i] <- uclust::bn(group_id = c(rep(0,
-                                                 nrow(mdh0_acf)),1),
-                                
-                                data = rbind(mdh0_acf,
-                                             mdh1_acf[i,]))/sqrt(v_bn_calc_acf)
-        
-      }
+      
+      # v_bn_calc_acf<-v_bn(mdh0_acf)
+      
+      v_bn_calc_acf <- compute_v_bn(mdh0_acf)
+      
+      bn_new_pad_acf <- compute_bn_pad(md_h0 = mdh0_acf, md_h1=mdh1_acf, pad=sqrt(v_bn_calc_acf))
+      
       fim_acf<-Sys.time()
       if(repl < 5){
         print("Acf:")
@@ -148,15 +101,12 @@ for( n_ite_norig in 1:length(n_orig)){
       }
       
       inicio_drift<-Sys.time()
-      for(i in 1:nrow(mdserh1_drift)){
-        # bn padronizado
-        bn_new_pad_drift[i] <- bn(group_id = c(rep(0,
-                                                   nrow(mdserh0_drift)),1),
-                                  
-                                  data = rbind(mdserh0_drift,
-                                               mdserh1_drift[i,]))/sqrt(v_bn_calc_drift)
-        
-      }
+
+      
+      v_bn_calc_drift<-compute_v_bn(mdserh0_drift)
+      
+      bn_new_pad_drift <- compute_bn_pad(md_h0=mdserh0_drift, md_h1 = mdserh1_drift, pad=sqrt(v_bn_calc_drift))
+      
       fim_drift<-Sys.time()
       if(repl < 5){
         print("Drift:")
@@ -164,7 +114,6 @@ for( n_ite_norig in 1:length(n_orig)){
       }
       resultados_replicacao_acf[repl]<-ifelse(sum(bn_new_pad_acf > -qnorm( p = 0.05) ) == 0,NA, 1/(sum(bn_new_pad_acf > -qnorm( p = 0.05)  )/nrow(mdh1_acf))) 
       resultados_replicacao_drift[repl]<-ifelse(sum(bn_new_pad_drift > -qnorm( p = 0.05) ) ==0,NA, 1/(sum(bn_new_pad_drift > -qnorm( p = 0.05)  )/nrow(mdserh1_drift))) 
-      source("mpca_arma_fun.R")
       
       inicio_arl<-Sys.time()
       arl_T2[repl]<-mpca_arma_fun(x = mdserh0,
@@ -214,190 +163,37 @@ for( n_ite_norig in 1:length(n_orig)){
 }
 fim<-Sys.time()
 fim-inicio_0
+
+future::plan(future::sequential)
 # acf ------------------------------------------
 
-for(j in 1:length(lista_das_listas_acf)){
-  for( i in 1:length(lista_alfa_acf)){
-    
-    
-    
-    if(i==1 & j== 1){
-      
-      
-      media <- mean(lista_das_listas_acf[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_acf[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_acf[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      df_resultados_acf<-data.frame(media,
-                                    desvpad,
-                                    median,
-                                    n_origem,
-                                    coeficiente)
-      
-    }else{
-      
-      aux<-NULL
-      media <- mean(lista_das_listas_acf[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_acf[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_acf[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      aux<-data.frame(media,
-                      desvpad,
-                      median,
-                      n_origem,
-                      coeficiente)
-      df_resultados_acf<-rbind(df_resultados_acf,aux)
-    }
-    
-    
-    
-  }
-}
-df_resultados_acf
+#df_resultados_acf
+df_resultados_acf <- compute_results(lista_das_listas_acf, lista_alfa_acf,
+                                     n_orig, alfa_h1)
+readr::write_rds(df_resultados_acf, 'df_resultados_acf.rds')
 
 
 
 #  drift ------------------------------------------
 
-for(j in 1:length(lista_das_listas_drift)){
-  for( i in 1:length(lista_alfa_drift)){
-    
-    
-    
-    if(i==1 & j== 1){
-      
-      
-      media <- mean(lista_das_listas_drift[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_drift[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_drift[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      df_resultados_drift<-data.frame(media,
-                                      desvpad,
-                                      median,
-                                      n_origem,
-                                      coeficiente)
-      
-    }else{
-      
-      aux<-NULL
-      media <- mean(lista_das_listas_drift[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_drift[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_drift[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      aux<-data.frame(media,
-                      desvpad,
-                      median,
-                      n_origem,
-                      coeficiente)
-      df_resultados_drift<-rbind(df_resultados_drift,aux)
-      
-    }
-    
-    
-    
-  }
-}
+#df_resultados_drift
+df_resultados_drift <- compute_results(lista_das_listas_drift, lista_alfa_drift,
+                                       n_orig, alfa_h1)
 
-df_resultados_drift
+readr::write_rds(df_resultados_drift, 'df_resultados_drift.rds')
 
 #  alt T ------------------------------------------
 
-for(j in 1:length(lista_das_listas_mpa_T)){
-  for( i in 1:length(lista_alfa_drift)){
-    
-    
-    
-    if(i==1 & j== 1){
-      
-      
-      media <- mean(lista_das_listas_mpa_T[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_mpa_T[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_mpa_T[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      df_resultados_alT<-data.frame(media,
-                                    desvpad,
-                                    median,
-                                    n_origem,
-                                    coeficiente)
-      
-    }else{
-      
-      aux<-NULL
-      media <- mean(lista_das_listas_mpa_T[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_mpa_T[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_mpa_T[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      aux<-data.frame(media,
-                      desvpad,
-                      median,
-                      n_origem,
-                      coeficiente)
-      df_resultados_alT<-rbind(df_resultados_alT,aux)
-      
-    }
-    
-    
-    
-  }
-}
-df_resultados_alT
+#df_resultados_alT
+df_resultados_alT <- compute_results(lista_das_listas_mpa_T, lista_alfa_drift,
+                                     n_orig, alfa_h1)
+
+readr::write_rds(df_resultados_alT, 'df_resultados_alT.rds')
 
 #  alt Q ------------------------------------------
 
-for(j in 1:length(lista_das_listas_mpa_Q)){
-  for( i in 1:length(lista_alfa_drift)){
-    
-    
-    
-    if(i==1 & j== 1){
-      
-      
-      media <- mean(lista_das_listas_mpa_Q[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_mpa_Q[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_mpa_Q[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      df_resultados_alQ<-data.frame(media,
-                                    desvpad,
-                                    median,
-                                    n_origem,
-                                    coeficiente)
-      
-    }else{
-      
-      aux<-NULL
-      media <- mean(lista_das_listas_mpa_Q[[j]][[i]],na.rm =TRUE)
-      desvpad <- sd(lista_das_listas_mpa_Q[[j]][[i]],na.rm =TRUE)
-      median <- median(lista_das_listas_mpa_Q[[j]][[i]],na.rm =TRUE)
-      n_origem <- n_orig[[j]]
-      coeficiente <- alfa_h1[[i]]
-      
-      aux<-data.frame(media,
-                      desvpad,
-                      median,
-                      n_origem,
-                      coeficiente)
-      df_resultados_alQ<-rbind(df_resultados_alQ,aux)
-      
-    }
-    
-    
-    
-  }
-}
+#df_resultados_alQ
+df_resultados_alQ <- compute_results(lista_das_listas_mpa_Q, lista_alfa_drift,
+                                     n_orig, alfa_h1)
 
-df_resultados_alQ
-
+readr::write_rds(df_resultados_alQ, 'df_resultados_alQ.rds')
